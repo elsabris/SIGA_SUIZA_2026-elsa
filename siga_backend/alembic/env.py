@@ -21,15 +21,18 @@ if not db_url:
     host = os.getenv("DB_HOST", "host.docker.internal")
     port = os.getenv("DB_PORT", "5432")
     dbname = os.getenv("DB_NAME", "siga_core")
-    db_url = f"postgresql+psycopg2://{user}:{password}@{host}:{port}/{dbname}"
+    db_url = f"postgresql+psycopg://{user}:{password}@{host}:{port}/{dbname}"
     config.set_main_option("sqlalchemy.url", db_url)
 else:
     config.set_main_option("sqlalchemy.url", db_url)
 
 # Convertir asyncpg a psycopg (sync) para migraciones síncronas
 url = config.get_main_option("sqlalchemy.url")
-if url and "asyncpg" in url:
-    url = url.replace("postgresql+asyncpg://", "postgresql+psycopg://")
+if url:
+    if url.startswith("postgresql+asyncpg://"):
+        url = url.replace("postgresql+asyncpg://", "postgresql+psycopg://", 1)
+    elif url.startswith("postgresql://"):
+        url = url.replace("postgresql://", "postgresql+psycopg://", 1)
     config.set_main_option("sqlalchemy.url", url)
 
 # Interpretar el archivo de config para logging
