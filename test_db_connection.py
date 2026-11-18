@@ -1,13 +1,19 @@
 import os
 
-import psycopg2
+try:
+    import psycopg2 as psycopg
+except ImportError:
+    try:
+        import psycopg
+    except ImportError:
+        raise ImportError("Se requiere psycopg o psycopg2 instalado.")
 
 try:
-    conn = psycopg2.connect(
+    conn = psycopg.connect(
         host=os.getenv('DB_HOST', 'localhost'),
         port=int(os.getenv('DB_PORT', '5432')),
         user=os.getenv('DB_USER', 'postgres'),
-        password=os.getenv('DB_PASSWORD', ''),
+        password=os.getenv('DB_PASSWORD', '61077615'),
         dbname=os.getenv('DB_NAME', 'siga_suiza_2026')
     )
     cur = conn.cursor()

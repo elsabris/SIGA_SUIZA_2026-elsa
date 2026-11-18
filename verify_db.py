@@ -1,11 +1,19 @@
-import psycopg2
+import os
 
-conn = psycopg2.connect(
-    host='localhost',
-    port=5432,
-    user='postgres',
-    password='admin123',
-    database='siga_local'
+try:
+    import psycopg2 as psycopg
+except ImportError:
+    try:
+        import psycopg
+    except ImportError:
+        raise ImportError("Se requiere psycopg o psycopg2 instalado.")
+
+conn = psycopg.connect(
+    host=os.getenv('DB_HOST', 'localhost'),
+    port=int(os.getenv('DB_PORT', '5432')),
+    user=os.getenv('DB_USER', 'postgres'),
+    password=os.getenv('DB_PASSWORD', '61077615'),
+    dbname=os.getenv('DB_NAME', 'siga_suiza_2026')
 )
 cur = conn.cursor()
 
