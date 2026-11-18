@@ -18,6 +18,10 @@ class SIGAApiClient {
   }
 
   async request(endpoint, options = {}) {
+    if (!this.baseURL && typeof window !== 'undefined' && window.location.hostname.includes('vercel.app')) {
+      throw new Error('Falta configurar VITE_API_URL en las Variables de Entorno de Vercel con la URL del Backend (Railway).');
+    }
+
     const url = `${this.baseURL}${endpoint}`;
     const { timeoutMs, ...fetchOptions } = options;
     const controller = timeoutMs ? new AbortController() : null;
@@ -68,6 +72,9 @@ class SIGAApiClient {
       return await response.json();
     } catch (error) {
       console.error('API Request failed:', error);
+      if (error.name === 'TypeError' && error.message.toLowerCase().includes('fetch')) {
+        throw new Error('No se pudo conectar con el servidor Backend. Verifica que el servicio en Railway esté activo y la URL sea correcta.');
+      }
       throw error;
     } finally {
       if (timeoutId) clearTimeout(timeoutId);
