@@ -107,12 +107,16 @@ async def get_identity(request: Request, db: AsyncSession) -> Identity:
     )
     roles = [r[0].lower().strip() for r in roles_res.fetchall() if r[0]]
 
-    perfil_res = await db.execute(
-        text("SELECT programa_estudio_id FROM perfiles_personal WHERE user_id = :uid"),
-        {"uid": user_id}
-    )
-    perfil_row = perfil_res.fetchone()
-    programa_id = perfil_row[0] if perfil_row and perfil_row[0] is not None else None
+    programa_id = None
+    try:
+        perfil_res = await db.execute(
+            text("SELECT programa_estudio_id FROM perfiles_personal WHERE user_id = :uid"),
+            {"uid": user_id}
+        )
+        perfil_row = perfil_res.fetchone()
+        programa_id = perfil_row[0] if perfil_row and perfil_row[0] is not None else None
+    except Exception:
+        programa_id = None
 
     return Identity(
         user_id=user_id,

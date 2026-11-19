@@ -60,12 +60,16 @@ class AuthService:
         permissions = await self.user_repo.get_user_permissions(user.id)
         
         # Obtener programa_id si tiene perfil personal
-        res_prog = await self.user_repo.db.execute(
-            text("SELECT programa_estudio_id FROM perfiles_personal WHERE user_id = :uid LIMIT 1"),
-            {"uid": user.id}
-        )
-        row_prog = res_prog.fetchone()
-        programa_id = row_prog[0] if row_prog and row_prog[0] else None
+        programa_id = None
+        try:
+            res_prog = await self.user_repo.db.execute(
+                text("SELECT programa_estudio_id FROM perfiles_personal WHERE user_id = :uid LIMIT 1"),
+                {"uid": user.id}
+            )
+            row_prog = res_prog.fetchone()
+            programa_id = row_prog[0] if row_prog and row_prog[0] else None
+        except Exception:
+            programa_id = None
 
         # Obtener rol primario
         primary_role = user.roles[0].name if user.roles else "estudiante"
@@ -118,12 +122,16 @@ class AuthService:
         permissions = await self.user_repo.get_user_permissions(user.id)
         
         # Obtener programa_id si tiene perfil personal
-        res_prog = await self.user_repo.db.execute(
-            text("SELECT programa_estudio_id FROM perfiles_personal WHERE user_id = :uid LIMIT 1"),
-            {"uid": user.id}
-        )
-        row_prog = res_prog.fetchone()
-        programa_id = row_prog[0] if row_prog and row_prog[0] else None
+        programa_id = None
+        try:
+            res_prog = await self.user_repo.db.execute(
+                text("SELECT programa_estudio_id FROM perfiles_personal WHERE user_id = :uid LIMIT 1"),
+                {"uid": user.id}
+            )
+            row_prog = res_prog.fetchone()
+            programa_id = row_prog[0] if row_prog and row_prog[0] else None
+        except Exception:
+            programa_id = None
         
         primary_role = user.roles[0].name if user.roles else "estudiante"
         role_list = [r.name for r in user.roles] if user.roles else ["estudiante"]
