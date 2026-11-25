@@ -1,4 +1,6 @@
-from fastapi import APIRouter, HTTPException, Depends, status, Request
+from fastapi import APIRouter, HTTPException, Depends, status, Request, UploadFile, File, Form
+from fastapi.responses import Response
+from urllib.parse import quote
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, delete, text
 from typing import List, Optional
@@ -134,6 +136,53 @@ async def crear_periodo(periodo: PeriodoCreate, request: Request, db: AsyncSessi
 async def obtener_periodos(db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(PeriodoAcademico).order_by(PeriodoAcademico.fecha_inicio.desc()))
     return result.scalars().all()
+
+@router.delete("/periodos/{periodo_id}")
+async def eliminar_periodo(periodo_id: int, request: Request, db: AsyncSession = Depends(get_db)):
+    """Elimina un periodo académico si no tiene información dependiente."""
+    ident = await get_identity(request, db)
+    roles_ident = [str(r).lower() for r in (ident.roles or [])]
+    if not es_superadmin(ident) and (not roles_ident or all(r in ("estudiante", "docente", "invitado") for r in roles_ident)):
+        raise HTTPException(status_code=403, detail="No tiene permisos para eliminar periodos académicos")
+    result = await db.execute(select(PeriodoAcademico).where(PeriodoAcademico.id == periodo_id))
+    db_periodo = result.scalar_one_or_none()
+    if not db_periodo:
+        raise HTTPException(status_code=404, detail="Periodo no encontrado")
+
+    # Verificar dependencias (carga lectiva, planes, tutorías, horarios y matrículas)
+    dependencias = {
+        "carga_lectiva": "asignaciones de carga lectiva",
+        "planes_trabajo_docente": "planes de trabajo",
+        "tutorias": "tutorías",
+        "horarios_periodo": "horarios",
+        "matriculas": "matrículas",
+    }
+    encontrados = []
+    for tabla, etiqueta in dependencias.items():
+        try:
+            async with db.begin_nested():
+                r = await db.execute(text(f"SELECT COUNT(*) FROM {tabla} WHERE periodo_id = :pid"), {"pid": periodo_id})
+                n = r.scalar() or 0
+            if n:
+                encontrados.append(f"{n} {etiqueta}")
+        except Exception:
+            # La tabla puede no existir en esta base; se ignora.
+            pass
+    if encontrados:
+        raise HTTPException(
+            status_code=409,
+            detail=f"No se puede eliminar el periodo {db_periodo.codigo}: tiene " + ", ".join(encontrados) + ". Elimine primero esa información o cámbielo a Histórico."
+        )
+
+    codigo = db_periodo.codigo
+    await db.delete(db_periodo)
+    db.add(OutboxEvent(
+        event_type="periodo.eliminado",
+        payload={"id": periodo_id, "codigo": codigo,
+                 "metadata": {"request_id": request.headers.get("X-Request-ID", "unknown")}}
+    ))
+    await db.commit()
+    return {"ok": True, "id": periodo_id, "codigo": codigo}
 
 @router.put("/periodos/{periodo_id}/estado", response_model=PeriodoResponse)
 async def actualizar_estado_periodo(periodo_id: int, estado: str, request: Request, db: AsyncSession = Depends(get_db)):
@@ -1506,3 +1555,63 @@ async def eliminar_tutoria(programa_id: int, tutoria_id: int, db: AsyncSession =
     await db.commit()
     return {"message": "Tutoría eliminada"}
 
+
+# ---------------------------------------------------------------------------
+# Almacenamiento real de documentos (sílabos / planes de trabajo)
+# ---------------------------------------------------------------------------
+MAX_DOC_BYTES = 15 * 1024 * 1024  # 15 MB
+EXT_PERMITIDAS = {".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".png", ".jpg", ".jpeg"}
+
+
+@router.post("/documentos", status_code=status.HTTP_201_CREATED)
+async def subir_documento(
+    request: Request,
+    file: UploadFile = File(...),
+    categoria: Optional[str] = Form(None),
+    db: AsyncSession = Depends(get_db),
+):
+    from models import DocumentoArchivo
+    import os as _os
+    ident = await get_identity(request, db)
+    nombre = (file.filename or "documento").replace("\\", "/").split("/")[-1][:255]
+    ext = _os.path.splitext(nombre)[1].lower()
+    if ext not in EXT_PERMITIDAS:
+        raise HTTPException(status_code=400, detail=f"Tipo de archivo no permitido ({ext or 'sin extensión'}). Use PDF, Word, Excel o imagen.")
+    contenido = await file.read()
+    if not contenido:
+        raise HTTPException(status_code=400, detail="El archivo está vacío")
+    if len(contenido) > MAX_DOC_BYTES:
+        raise HTTPException(status_code=413, detail="El archivo supera el máximo de 15 MB")
+    doc = DocumentoArchivo(
+        nombre=nombre,
+        mime=(file.content_type or "application/octet-stream")[:120],
+        tamano=len(contenido),
+        categoria=(categoria or "otro")[:50],
+        subido_por=getattr(ident, "user_id", None),
+        contenido=contenido,
+    )
+    db.add(doc)
+    await db.commit()
+    await db.refresh(doc)
+    return {
+        "id": doc.id,
+        "nombre": doc.nombre,
+        "tamano": doc.tamano,
+        "mime": doc.mime,
+        "url": f"/api/mod-programas-estudio/documentos/{doc.id}",
+    }
+
+
+@router.get("/documentos/{documento_id}")
+async def descargar_documento(documento_id: int, request: Request, db: AsyncSession = Depends(get_db)):
+    from models import DocumentoArchivo
+    await get_identity(request, db)
+    res = await db.execute(select(DocumentoArchivo).where(DocumentoArchivo.id == documento_id))
+    doc = res.scalar_one_or_none()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Documento no encontrado")
+    return Response(
+        content=doc.contenido,
+        media_type=doc.mime or "application/octet-stream",
+        headers={"Content-Disposition": f"inline; filename*=UTF-8''{quote(doc.nombre)}"},
+    )
