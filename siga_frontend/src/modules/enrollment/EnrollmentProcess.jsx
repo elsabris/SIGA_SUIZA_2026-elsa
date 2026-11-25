@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { apiClient, API_BASE } from '../../core/api/client';
 import { QRCodeSVG } from 'qrcode.react';
-import { getDefaultPeriod, getPeriodLabel, isHistoricalPeriod, isFirstPeriodOfYear } from './periodUtils';
+import { getDefaultPeriod, getPeriodLabel, isHistoricalPeriod, isFirstPeriodOfYear, sortPeriods } from './periodUtils';
 import { useToast } from '../../core/ui/ToastContext';
 
 export function EnrollmentProcess({ initialStudent, onCancel }) {
@@ -30,15 +30,81 @@ export function EnrollmentProcess({ initialStudent, onCancel }) {
   const [consolidando, setConsolidando] = useState(false);
 
   const [cachedStudents, setCachedStudents] = useState([]);
+  // Filtro por periodo: cachimbos (ingresantes) e históricos (con matrículas previas)
+  const [allPeriods, setAllPeriods] = useState([]);
+  const [allMatriculas, setAllMatriculas] = useState([]);
+  const [filterPeriodId, setFilterPeriodId] = useState('');
+  const [studentFilter, setStudentFilter] = useState('todos'); // todos | cachimbos | historicos
+
+  useEffect(() => {
+    if (initialStudent) return;
+    let cancel = false;
+    (async () => {
+      const [est, per, mats] = await Promise.all([
+        apiClient.callModule('mod-gestion-academica', 'estudiantes/').catch(() => []),
+        apiClient.callModule('mod-programas-estudio', 'periodos').catch(() => []),
+        apiClient.callModule('mod-gestion-academica', 'matriculas/').catch(() => []),
+      ]);
+      if (cancel) return;
+      const pool = Array.isArray(est) ? est : [];
+      const periodos = sortPeriods(Array.isArray(per) ? per : []);
+      setCachedStudents(pool);
+      setAllPeriods(periodos);
+      setAllMatriculas(Array.isArray(mats) ? mats : []);
+      const def = getDefaultPeriod(periodos);
+      if (def) setFilterPeriodId(prev => prev || String(def.id));
+    })();
+    return () => { cancel = true; };
+  }, [initialStudent]);
+
+  const filterPeriod = allPeriods.find(p => String(p.id) === String(filterPeriodId)) || null;
+
+  // Clasifica al estudiante respecto al periodo elegido.
+  const classifyStudent = (s, period) => {
+    if (!period) return { tipo: 'sin_periodo', enrolledHere: false, previas: 0 };
+    const inicio = new Date(period.fecha_inicio || 0).getTime();
+    const periodoInicio = new Map(allPeriods.map(p => [String(p.id), new Date(p.fecha_inicio || 0).getTime()]));
+    const mats = allMatriculas.filter(m => String(m.estudiante_id) === String(s.id) && m.estado_matricula !== 'anulado');
+    const enrolledHere = mats.some(m => String(m.periodo_id) === String(period.id));
+    const previas = mats.filter(m => {
+      if (String(m.periodo_id) === String(period.id)) return false;
+      const t = periodoInicio.get(String(m.periodo_id));
+      return t === undefined ? true : t < inicio;
+    }).length;
+    const estado = String(s.estado_academico || '').toLowerCase();
+    const esIngresante = ['postulante', 'ingresante', 'admitido', 'cachimbo'].includes(estado);
+    if (previas > 0 || ['historico', 'histórico', 'egresado', 'retirado', 'reingresante'].includes(estado)) {
+      return { tipo: 'historico', enrolledHere, previas };
+    }
+    if (esIngresante || previas === 0) {
+      return { tipo: 'cachimbo', enrolledHere, previas };
+    }
+    return { tipo: 'historico', enrolledHere, previas };
+  };
+
+  const matchesFilter = (s) => {
+    if (studentFilter === 'todos') return true;
+    const c = classifyStudent(s, filterPeriod);
+    if (studentFilter === 'cachimbos') return c.tipo === 'cachimbo' && isFirstPeriodOfYear(filterPeriod);
+    if (studentFilter === 'historicos') return c.tipo === 'historico';
+    return true;
+  };
+
+  const computeList = (val, pool) => {
+    const term = (val || '').trim().toLowerCase();
+    return pool.filter(s => {
+      const okTerm = !term || term.length < 2 ||
+        (s.dni && String(s.dni).includes(term)) ||
+        (s.nombres && s.nombres.toLowerCase().includes(term)) ||
+        (s.apellidos && s.apellidos.toLowerCase().includes(term)) ||
+        (s.codigo_estudiante && s.codigo_estudiante.toLowerCase().includes(term));
+      return okTerm && matchesFilter(s);
+    });
+  };
 
   // 1. Buscar Estudiante Maestro Optimizado (Caché en cliente para búsqueda instantánea)
   const searchStudent = async (val) => {
     setSearchTerm(val);
-    if (!val || val.trim().length < 2) {
-      setStudents([]);
-      return;
-    }
-    const term = val.trim().toLowerCase();
     try {
       let pool = cachedStudents;
       if (pool.length === 0) {
@@ -46,17 +112,38 @@ export function EnrollmentProcess({ initialStudent, onCancel }) {
         pool = Array.isArray(data) ? data : [];
         setCachedStudents(pool);
       }
-      const filtered = pool.filter(s => 
-        (s.dni && s.dni.includes(term)) || 
-        (s.nombres && s.nombres.toLowerCase().includes(term)) || 
-        (s.apellidos && s.apellidos.toLowerCase().includes(term)) || 
-        (s.codigo_estudiante && s.codigo_estudiante.toLowerCase().includes(term))
-      );
-      setStudents(filtered);
-    } catch (e) { 
-      console.error(e); 
+      if ((!val || val.trim().length < 2) && studentFilter === 'todos') {
+        setStudents([]);
+        return;
+      }
+      setStudents(computeList(val, pool));
+    } catch (e) {
+      console.error(e);
       setStudents([]);
     }
+  };
+
+  // Recalcular la lista cuando cambia el periodo o el filtro.
+  useEffect(() => {
+    if (initialStudent) return;
+    if ((!searchTerm || searchTerm.trim().length < 2) && studentFilter === 'todos') {
+      setStudents([]);
+      return;
+    }
+    setStudents(computeList(searchTerm, cachedStudents));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filterPeriodId, studentFilter, cachedStudents, allMatriculas]);
+
+  const pickStudent = (s) => {
+    const c = classifyStudent(s, filterPeriod);
+    const firstOfYear = isFirstPeriodOfYear(filterPeriod);
+    setSelection(prev => ({
+      ...prev,
+      student: s,
+      period: filterPeriod || prev.period,
+      tipo: c.tipo === 'cachimbo' && firstOfYear ? 'Ordinario' : (c.tipo === 'historico' ? 'Regular' : prev.tipo === 'Ordinario' && !firstOfYear ? 'Regular' : prev.tipo),
+    }));
+    setStep(2);
   };
 
   // 2. Cargar Datos Académicos
@@ -237,7 +324,10 @@ export function EnrollmentProcess({ initialStudent, onCancel }) {
         observaciones: 'Registrada desde el asistente visual de matrícula.',
         detalles: detalles
       });
-      setMatricula(mat);      // Emisión de boleta/QR eliminada: corresponde exclusivamente al módulo Finanzas y Pagos.
+      setMatricula(mat);
+      if (selection.student?.dni) {
+        toast.success(`Cuenta del estudiante lista: ${String(selection.student.dni).trim()}@siga.edu (contraseña inicial: su DNI).`);
+      }      // Emisión de boleta/QR eliminada: corresponde exclusivamente al módulo Finanzas y Pagos.
 
 
       // Sección 8: avance de créditos del estudiante.
@@ -313,6 +403,42 @@ export function EnrollmentProcess({ initialStudent, onCancel }) {
           {step === 1 && (
             <div className="animate-fade-in-right bg-white/40 p-6 rounded-xl border border-white/60 min-h-[400px]">
               <h5 className="font-bold text-xl text-slate-800 mb-6">1. Identificar Estudiante Maestro</h5>
+              <div className="mb-4 flex flex-col md:flex-row md:items-end gap-3">
+                <div className="md:w-72">
+                  <label className="text-[10px] uppercase font-extrabold text-slate-400 tracking-wider mb-1 block">Periodo de matrícula</label>
+                  <select
+                    className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg font-semibold text-slate-700 outline-none focus:ring-2 focus:ring-primary/40"
+                    value={filterPeriodId}
+                    onChange={(e) => setFilterPeriodId(e.target.value)}
+                  >
+                    {allPeriods.length === 0 && <option value="">Sin periodos registrados</option>}
+                    {allPeriods.map(p => (
+                      <option key={p.id} value={p.id}>{getPeriodLabel(p)}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {[
+                    { key: 'todos', label: 'Todos' },
+                    { key: 'cachimbos', label: 'Cachimbos (ingresantes)' },
+                    { key: 'historicos', label: 'Históricos / continuadores' },
+                  ].map(f => (
+                    <button
+                      key={f.key}
+                      type="button"
+                      onClick={() => setStudentFilter(f.key)}
+                      className={`px-3 py-2 rounded-lg text-xs font-bold border transition-colors ${studentFilter === f.key ? 'bg-primary text-white border-primary' : 'bg-white text-slate-600 border-slate-200 hover:border-primary/40'}`}
+                    >
+                      {f.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              {studentFilter === 'cachimbos' && filterPeriod && !isFirstPeriodOfYear(filterPeriod) && (
+                <div className="mb-4 text-xs font-medium text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                  El periodo {filterPeriod.codigo} no es de inicio de año: no hay cachimbos para matricular. Elija un periodo «-I» o use el filtro Históricos.
+                </div>
+              )}
               <div className="mb-6 relative">
                 <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400">🔍</span>
                 <input 
@@ -328,21 +454,34 @@ export function EnrollmentProcess({ initialStudent, onCancel }) {
                   <button 
                     key={s.id} 
                     className="w-full text-left p-4 rounded-xl bg-white border border-slate-100 hover:border-primary/30 hover:shadow-md transition-all flex justify-between items-center group"
-                    onClick={() => { setSelection({...selection, student: s}); setStep(2); }}
+                    onClick={() => pickStudent(s)}
                   >
                     <div className="flex items-center">
                       <div className="w-10 h-10 rounded-full bg-primary/10 text-primary flex items-center justify-center font-bold mr-4 group-hover:scale-110 transition-transform">
-                        {s.nombres[0]}{s.apellidos[0]}
+                        {(s.nombres || '?')[0]}{(s.apellidos || '?')[0]}
                       </div>
                       <div>
                         <div className="font-bold text-slate-800 group-hover:text-primary transition-colors">{s.nombres} {s.apellidos}</div>
                         <div className="text-xs font-semibold text-slate-400 mt-0.5">DNI: {s.dni} <span className="mx-2 text-slate-300">|</span> {s.codigo_estudiante}</div>
+                        {filterPeriod && (() => {
+                          const c = classifyStudent(s, filterPeriod);
+                          return (
+                            <div className="flex gap-1.5 mt-1">
+                              <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${c.tipo === 'cachimbo' ? 'bg-emerald-100 text-emerald-700' : 'bg-indigo-100 text-indigo-700'}`}>
+                                {c.tipo === 'cachimbo' ? 'Cachimbo' : `Histórico (${c.previas} matr. previas)`}
+                              </span>
+                              {c.enrolledHere && (
+                                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">Ya matriculado en {filterPeriod.codigo}</span>
+                              )}
+                            </div>
+                          );
+                        })()}
                       </div>
                     </div>
                     <span className="px-4 py-1.5 bg-primary/10 text-primary font-semibold text-sm rounded-full opacity-0 group-hover:opacity-100 transition-opacity">Seleccionar</span>
                   </button>
                 ))}
-                {students.length === 0 && searchTerm.length >= 3 && (
+                {students.length === 0 && (searchTerm.length >= 3 || studentFilter !== 'todos') && (
                   <div className="text-center py-8 text-slate-500">No se encontraron estudiantes que coincidan con la búsqueda.</div>
                 )}
               </div>
