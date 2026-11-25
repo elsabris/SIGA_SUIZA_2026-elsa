@@ -49,7 +49,15 @@ class ExcelMineduParser:
                     if val_lower in ["i", "ii", "iii", "iv", "v", "vi", "1", "2", "3", "4", "5", "6", "periodo"]:
                         found_cols[val_lower] = j
             
-            if len([k for k in found_cols.keys() if any(rk in k for rk in required_keywords)]) >= 2 and any("unidad" in k for k in found_cols.keys()):
+            kw_cols = {k: c for k, c in found_cols.items() if any(rk in k for rk in required_keywords)}
+            unidad_col = kw_cols.get("unidad")
+            if unidad_col is None:
+                continue
+            # La cabecera real tiene "unidad" y otra palabra clave en columnas DISTINTAS
+            # (evita confundir títulos largos como "Unidad de competencia ... horas").
+            otras_cols = {c for k, c in kw_cols.items() if k != "unidad" and c != unidad_col}
+            celda_unidad = str(row.values[unidad_col]).strip()
+            if otras_cols and len(celda_unidad) <= 60:
                 return i, found_cols
                 
         return None

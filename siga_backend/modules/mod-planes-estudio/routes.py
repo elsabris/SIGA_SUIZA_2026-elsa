@@ -180,6 +180,17 @@ async def preview_plan_minedu(file: UploadFile = File(...)):
         "data": data
     }
 
+def _clip_campos(model, data: dict) -> dict:
+    """Recorta los textos al largo máximo de cada columna (evita HTTP 500 con nombres MINEDU muy largos)."""
+    out = dict(data)
+    for col in model.__table__.columns:
+        largo = getattr(col.type, "length", None)
+        v = out.get(col.name)
+        if largo and isinstance(v, str) and len(v) > largo:
+            out[col.name] = v[: largo - 1].rstrip() + "…"
+    return out
+
+
 @router.post("/planes/importar-minedu")
 async def importar_plan_minedu(
     request: Request, 
@@ -210,9 +221,10 @@ async def importar_plan_minedu(
     
     if existing_plan:
         # Si ya existe un plan con este código, sincronizamos sus metadatos de forma idempotente
+        data_clip = _clip_campos(PlanEstudio, data)
         for k in valid_plan_fields:
-            if k in data and data[k] is not None:
-                setattr(existing_plan, k, data[k])
+            if k in data_clip and data_clip[k] is not None:
+                setattr(existing_plan, k, data_clip[k])
         await db.commit()
         await db.refresh(existing_plan)
         return {
@@ -224,19 +236,19 @@ async def importar_plan_minedu(
 
     # Crear el plan nuevo (solo campos válidos del modelo)
     plan_data = {k: v for k, v in data.items() if k in valid_plan_fields}
-    db_plan = PlanEstudio(**plan_data)
+    db_plan = PlanEstudio(**_clip_campos(PlanEstudio, plan_data))
     db.add(db_plan)
     await db.flush()
     
     # Crear módulos y unidades
     for mod_data in data.get("modulos", []):
         unidades_data = mod_data.pop("unidades", [])
-        db_modulo = ModuloPlan(**mod_data, plan_id=db_plan.id)
+        db_modulo = ModuloPlan(**_clip_campos(ModuloPlan, mod_data), plan_id=db_plan.id)
         db.add(db_modulo)
         await db.flush()
         
         for ud_data in unidades_data:
-            db_unidad = UnidadPlan(**ud_data, modulo_id=db_modulo.id)
+            db_unidad = UnidadPlan(**_clip_campos(UnidadPlan, ud_data), modulo_id=db_modulo.id)
             db.add(db_unidad)
             
     # Registrar en Outbox
