@@ -1,9 +1,20 @@
 import { useState, useEffect } from 'react';
 import { apiClient } from '../../core/api/client';
 import { useToast } from '../../core/ui/ToastContext';
-import { X, Lightbulb, Calendar, Plus, Clock, ArrowRight } from 'lucide-react';
+import { useConfirm } from '../../core/ui/ConfirmModal';
+import { X, Lightbulb, Calendar, Plus, Clock, ArrowRight, Trash2 } from 'lucide-react';
+
+function useSafeConfirm() {
+  try {
+    return useConfirm();
+  } catch {
+    return async () => window.confirm('¿Confirmar la acción?');
+  }
+}
 
 export function PeriodManager({ onClose, onUpdate }) {
+  const confirm = useSafeConfirm();
+  const [deletingId, setDeletingId] = useState(null);
   const toast = useToast();
   const [periods, setPeriods] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -88,6 +99,28 @@ export function PeriodManager({ onClose, onUpdate }) {
             {estado}
           </span>
         );
+    }
+  };
+
+  const handleDelete = async (period) => {
+    const ask = typeof confirm === 'function' ? confirm : confirm?.confirm;
+    const ok = await ask({
+      title: 'Eliminar periodo',
+      message: `¿Seguro que desea eliminar el periodo ${period.codigo}? Esta acción no se puede deshacer.`,
+      isDestructive: true
+    });
+    if (!ok) return;
+    setDeletingId(period.id);
+    try {
+      await apiClient.callModule('mod-programas-estudio', `periodos/${period.id}`, 'DELETE');
+      toast.success(`Periodo ${period.codigo} eliminado`);
+      fetchPeriods();
+      if (onUpdate) onUpdate();
+    } catch (error) {
+      console.error('Error eliminando periodo:', error);
+      toast.error(error.message || 'No se pudo eliminar el periodo');
+    } finally {
+      setDeletingId(null);
     }
   };
 
@@ -285,6 +318,16 @@ export function PeriodManager({ onClose, onUpdate }) {
                             <option value="historico">Histórico</option>
                           </select>
                         </div>
+                        <button
+                          type="button"
+                          onClick={() => handleDelete(period)}
+                          disabled={deletingId === period.id}
+                          className="inline-flex items-center gap-1 text-[11px] font-semibold text-red-600 hover:text-white hover:bg-red-600 border border-red-200 hover:border-red-600 rounded-lg px-2 py-0.5 transition-colors disabled:opacity-50"
+                          title="Eliminar periodo"
+                        >
+                          <Trash2 size={12} />
+                          {deletingId === period.id ? 'Eliminando...' : 'Eliminar periodo'}
+                        </button>
                       </div>
                     </div>
                   </div>

@@ -2,6 +2,7 @@
 import { useState, useEffect } from 'react';
 import { apiClient } from '../../core/api/client';
 import { useToast } from '../../core/ui/ToastContext';
+import { openDocument } from '../../core/utils/documents';
 import { FileText, BookOpen, ExternalLink, Filter, AlertCircle, X } from 'lucide-react';
 
 function useSafeToast() {
@@ -131,9 +132,9 @@ export function CoordinatorReview({ programId, periodId, docentes, cargaLectiva,
                   }`}>
                     {plan.estado}
                   </span>
-                  <a href={plan.archivo_url} target="_blank" rel="noopener noreferrer" className="text-primary hover:text-primary-dark text-sm font-medium flex items-center">
+                  <button type="button" onClick={() => openDocument(plan.archivo_url, toast)} className="text-primary hover:text-primary-dark text-sm font-medium flex items-center">
                     <ExternalLink size={14} className="mr-1" /> Ver Doc
-                  </a>
+                  </button>
                 </div>
                 {plan.observaciones && <p className="text-xs text-red-600 mb-3 bg-red-50 p-2 rounded">Obs: {plan.observaciones}</p>}
 
@@ -194,9 +195,9 @@ export function CoordinatorReview({ programId, periodId, docentes, cargaLectiva,
                   }`}>
                     {silabo.estado}
                   </span>
-                  <a href={silabo.archivo_url} target="_blank" rel="noopener noreferrer" className="text-primary hover:text-primary-dark text-sm font-medium flex items-center">
+                  <button type="button" onClick={() => openDocument(silabo.archivo_url, toast)} className="text-primary hover:text-primary-dark text-sm font-medium flex items-center">
                     <ExternalLink size={14} className="mr-1" /> Ver Doc
-                  </a>
+                  </button>
                 </div>
 
                 {silabo.observaciones && <p className="text-[10px] text-red-600 mb-3 bg-red-50 p-2 rounded">Obs: {silabo.observaciones}</p>}

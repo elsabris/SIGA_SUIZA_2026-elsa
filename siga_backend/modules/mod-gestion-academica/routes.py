@@ -725,7 +725,17 @@ async def realizar_matricula(request: Request, data: MatriculaCreate, db: AsyncS
     
     db.add(OutboxEvent(event_type=event_payload["event_type"], payload=event_payload))
     await db.commit()
-    
+
+    # Crear la cuenta institucional del estudiante (DNI@siga.edu, contraseña inicial = DNI)
+    try:
+        from student_account import asegurar_cuenta_estudiante
+        est = (await db.execute(select(Estudiante).where(Estudiante.id == data.estudiante_id))).scalar_one_or_none()
+        if est is not None:
+            cuenta = await asegurar_cuenta_estudiante(db, est)
+            print(f"[MATRICULA] Cuenta estudiante: {cuenta}")
+    except Exception as exc:
+        print(f"[MATRICULA] No se pudo crear la cuenta del estudiante: {exc}")
+
     result = await db.execute(select(Matricula).options(selectinload(Matricula.detalles)).where(Matricula.id == db_matricula.id))
     return result.scalar_one()
 

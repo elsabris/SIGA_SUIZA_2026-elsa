@@ -435,6 +435,30 @@ const PROGRAMAS_OPTIONS = [
 
 const TIPOS_SANGRE = ['O+', 'O-', 'A+', 'A-', 'B+', 'B-', 'AB+', 'AB-'];
 
+// Sincroniza el catálogo local con los programas reales de la base (incluye carreras nuevas).
+const mergeProgramas = (lista) => {
+  if (!Array.isArray(lista)) return false;
+  let changed = false;
+  lista.forEach(p => {
+    if (!p || p.id === undefined || p.id === null) return;
+    const id = String(p.id);
+    const label = p.nombre || p.label || `Programa ${id}`;
+    const existing = PROGRAMAS.find(item => item.id === id);
+    if (existing) {
+      if (existing.label !== label) { existing.label = label; changed = true; }
+    } else {
+      PROGRAMAS.push({ id, label });
+      changed = true;
+    }
+    const opt = PROGRAMAS_OPTIONS.find(o => o.value === id);
+    if (opt) { if (opt.label !== label) opt.label = label; }
+    else PROGRAMAS_OPTIONS.push({ value: id, label });
+  });
+  return changed;
+};
+
+const ADMIN_ROLES = ['superadmin', 'admin', 'administrador', 'secretaria_academica', 'admin_admision', 'jefe_unidad_academica', 'director'];
+
 const getProgramaLabel = (programaId) => {
   const programa = PROGRAMAS.find(item => item.id === String(programaId));
   return programa ? programa.label : 'Sin carrera seleccionada';
@@ -537,6 +561,20 @@ export function StudentMaster() {
   const userRoles = user?.roles ? user.roles.map(r => typeof r === 'string' ? r : r.nombre || r.name) : [];
   const primaryRole = user?.is_superuser ? 'superadmin' : (userRoles.length > 0 ? userRoles[0] : (user?.role || 'invitado'));
   const userRole = primaryRole;
+  const isAdminLike = Boolean(user?.is_superuser) || [primaryRole, user?.role, ...userRoles]
+    .filter(Boolean)
+    .some(r => ADMIN_ROLES.includes(String(r).toLowerCase()) || /admin/i.test(String(r)));
+  const [, setProgramasVersion] = useState(0);
+  useEffect(() => {
+    let cancel = false;
+    fetch(`${API_BASE}/api/mod-programas-estudio/programas`, {
+      headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+    })
+      .then(r => (r.ok ? r.json() : []))
+      .then(data => { if (!cancel && mergeProgramas(data)) setProgramasVersion(v => v + 1); })
+      .catch(() => {});
+    return () => { cancel = true; };
+  }, []);
   const [students, setStudents] = useState([]);
   const [loading, setLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
@@ -618,7 +656,7 @@ export function StudentMaster() {
 
   useEffect(() => {
     if (userRole !== 'invitado') {
-      if (userRole === 'secretaria_programa' && currentPrograma === 'ALL') {
+      if (!isAdminLike && userRole === 'secretaria_programa' && currentPrograma === 'ALL') {
         const fallbackId = user?.email === 'secretaria_prog@siga.edu' ? '2' : '1';
         setCurrentPrograma(user?.programa_id ? String(user.programa_id) : fallbackId);
       } else {
@@ -1311,7 +1349,7 @@ export function StudentMaster() {
       </div>
 
       <div className="glass-card p-3 mb-6 flex flex-col md:flex-row md:items-center gap-3 relative z-30 lg:shrink-0">
-        {['superadmin', 'admin', 'secretaria_academica', 'admin_admision'].includes(userRole) && (
+        {(isAdminLike || ['superadmin', 'admin', 'secretaria_academica', 'admin_admision'].includes(userRole)) && (
           <ProgramaFilter value={currentPrograma} onChange={setCurrentPrograma} />
         )}
         <div className="group flex-1 flex items-center gap-3 h-[56px] pl-3 pr-3 rounded-xl border-2 border-slate-200 bg-white shadow-md transition-all duration-200 focus-within:border-primary/60 focus-within:ring-4 focus-within:ring-primary/15 focus-within:shadow-lg focus-within:shadow-primary/10">

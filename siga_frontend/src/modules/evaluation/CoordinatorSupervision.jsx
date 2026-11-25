@@ -148,6 +148,8 @@ export function CoordinatorSupervision() {
         
         return {
           id: est.id,
+          dni: est.dni || '',
+          codigo: est.codigo_estudiante || '',
           name: `${est.apellidos}, ${est.nombres}`,
           nota_final: gradeRecord?.nota_final ?? '-',
           estado: gradeRecord?.estado || 'Sin Registrar'
@@ -160,6 +162,113 @@ export function CoordinatorSupervision() {
       console.error('Error fetching actas', e);
     }
     setLoadingUD(false);
+  };
+
+  const NOTAS_LETRAS = ['cero', 'uno', 'dos', 'tres', 'cuatro', 'cinco', 'seis', 'siete', 'ocho', 'nueve', 'diez',
+    'once', 'doce', 'trece', 'catorce', 'quince', 'dieciséis', 'diecisiete', 'dieciocho', 'diecinueve', 'veinte'];
+
+  const handleExportActaPDF = () => {
+    if (!selectedViewUD) return;
+    if (loadingUD) {
+      toast.info('Espere a que terminen de cargar las notas.');
+      return;
+    }
+    const esc = (v) => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    const prog = programs.find(p => String(p.id) === String(selectedProgram));
+    const per = periods.find(p => String(p.id) === String(selectedPeriod));
+    const fecha = new Date().toLocaleDateString('es-PE', { day: '2-digit', month: 'long', year: 'numeric' });
+    const aprobados = udStudents.filter(s => String(s.estado).toLowerCase() === 'aprobado').length;
+    const desaprobados = udStudents.filter(s => String(s.estado).toLowerCase() === 'desaprobado').length;
+    const filas = udStudents.map((s, i) => {
+      const n = parseInt(s.nota_final, 10);
+      const letras = Number.isFinite(n) && n >= 0 && n <= 20 ? NOTAS_LETRAS[n] : '—';
+      return `<tr>
+        <td class="c">${i + 1}</td>
+        <td class="c">${esc(s.dni || s.codigo)}</td>
+        <td>${esc(s.name)}</td>
+        <td class="c b">${esc(s.nota_final)}</td>
+        <td class="c">${esc(letras)}</td>
+        <td class="c">${esc(s.estado)}</td>
+      </tr>`;
+    }).join('') || '<tr><td colspan="6" class="c">Sin estudiantes matriculados en esta unidad didáctica.</td></tr>';
+
+    const html = `<!DOCTYPE html><html lang="es"><head><meta charset="utf-8">
+<title>Acta_${esc(selectedViewUD.nombre)}_${esc(per?.codigo || '')}</title>
+<style>
+  @page { size: A4; margin: 16mm 14mm; }
+  body { font-family: Arial, Helvetica, sans-serif; font-size: 11px; color: #111; }
+  .head { text-align: center; margin-bottom: 10px; }
+  .head h1 { font-size: 14px; margin: 0; letter-spacing: .5px; }
+  .head h2 { font-size: 12px; margin: 4px 0 0; font-weight: normal; }
+  .head h3 { font-size: 13px; margin: 10px 0 0; text-decoration: underline; }
+  table.meta { width: 100%; border-collapse: collapse; margin: 10px 0; }
+  table.meta td { padding: 3px 4px; vertical-align: top; }
+  table.meta td.k { font-weight: bold; width: 22%; }
+  table.notas { width: 100%; border-collapse: collapse; }
+  table.notas th, table.notas td { border: 1px solid #333; padding: 4px 5px; }
+  table.notas th { background: #e5e7eb; font-size: 10px; text-transform: uppercase; }
+  .c { text-align: center; } .b { font-weight: bold; }
+  .resumen { margin-top: 10px; }
+  .firmas { display: flex; justify-content: space-around; margin-top: 60px; }
+  .firma { width: 40%; text-align: center; border-top: 1px solid #111; padding-top: 4px; font-size: 10px; }
+  .pie { margin-top: 24px; font-size: 9px; color: #555; text-align: right; }
+</style></head><body>
+  <div class="head">
+    <h1>INSTITUTO DE EDUCACIÓN SUPERIOR TECNOLÓGICO PÚBLICO «SUIZA»</h1>
+    <h2>Sistema Integrado de Gestión Académica — SIGA</h2>
+    <h3>ACTA DE EVALUACIÓN DE LA UNIDAD DIDÁCTICA</h3>
+  </div>
+  <table class="meta">
+    <tr><td class="k">Programa de estudios:</td><td>${esc(prog?.nombre || '')}</td><td class="k">Periodo académico:</td><td>${esc(per?.codigo || '')}</td></tr>
+    <tr><td class="k">Módulo formativo:</td><td colspan="3">${esc(selectedViewUD.moduloNombre || '')}</td></tr>
+    <tr><td class="k">Unidad didáctica:</td><td colspan="3">${esc(selectedViewUD.nombre)}</td></tr>
+    <tr><td class="k">Créditos:</td><td>${esc(selectedViewUD.creditos ?? '')}</td><td class="k">Fecha de emisión:</td><td>${esc(fecha)}</td></tr>
+  </table>
+  <table class="notas">
+    <thead><tr><th style="width:5%">N°</th><th style="width:14%">DNI / Código</th><th>Apellidos y nombres</th><th style="width:9%">Nota</th><th style="width:14%">En letras</th><th style="width:14%">Condición</th></tr></thead>
+    <tbody>${filas}</tbody>
+  </table>
+  <div class="resumen"><b>Resumen:</b> Matriculados: ${udStudents.length} · Aprobados: ${aprobados} · Desaprobados: ${desaprobados} · Sin registrar: ${udStudents.length - aprobados - desaprobados}. Escala vigesimal (0–20), nota mínima aprobatoria: 13.</div>
+  <div class="firmas">
+    <div class="firma">Docente de la unidad didáctica</div>
+    <div class="firma">Coordinador(a) del programa de estudios</div>
+  </div>
+  <div class="firmas" style="margin-top:50px">
+    <div class="firma">Jefe(a) de Unidad Académica</div>
+    <div class="firma">Secretaría Académica</div>
+  </div>
+  <div class="pie">Documento generado por SIGA el ${esc(new Date().toLocaleString('es-PE'))}</div>
+</body></html>`;
+
+    const iframe = document.createElement('iframe');
+    iframe.style.position = 'fixed';
+    iframe.style.right = '0';
+    iframe.style.bottom = '0';
+    iframe.style.width = '0';
+    iframe.style.height = '0';
+    iframe.style.border = '0';
+    iframe.setAttribute('aria-hidden', 'true');
+    document.body.appendChild(iframe);
+    const doc = iframe.contentWindow?.document;
+    if (!doc) {
+      iframe.remove();
+      toast.error('No se pudo preparar el acta para impresión.');
+      return;
+    }
+    doc.open();
+    doc.write(html);
+    doc.close();
+    setTimeout(() => {
+      try {
+        iframe.contentWindow.focus();
+        iframe.contentWindow.print();
+        toast.success('Acta lista: elija «Guardar como PDF» en la ventana de impresión.');
+      } catch (err) {
+        console.error('Error al imprimir acta', err);
+        toast.error('No se pudo abrir la impresión del acta.');
+      }
+      setTimeout(() => iframe.remove(), 60000);
+    }, 300);
   };
 
   const userRoles = Array.isArray(user?.roles) ? user.roles : (user?.role ? [user.role] : []);
@@ -367,9 +476,10 @@ export function CoordinatorSupervision() {
               </div>
               <button 
                 className="btn-primary text-sm px-4 py-2 flex items-center"
-                onClick={() => toast.info("Función 'Exportar a PDF (MINEDU)' en desarrollo.")}
+                onClick={handleExportActaPDF}
+                disabled={loadingUD}
               >
-                <FileSpreadsheet className="w-4 h-4 mr-1" /> Exportar Acta Oficial
+                <FileSpreadsheet className="w-4 h-4 mr-1" /> Exportar a PDF (MINEDU)
               </button>
             </div>
           </div>

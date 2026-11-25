@@ -117,6 +117,12 @@ _MAP_COLUMNAS = {
     "apellido_materno": ["apellido materno", "materno", "segundo apellido"],
     "apellidos": ["apellidos"],
     "programa_id": ["programa_id", "id_programa", "programa id"],
+    "programa_nombre": ["programa de estudios", "programa de estudio", "programa", "carrera"],
+    "fecha_nacimiento": ["fecha nacimiento:", "fecha nacimiento", "fecha de nacimiento"],
+    "direccion": ["domicilio:", "domicilio", "direccion", "dirección"],
+    "codigo_postulante": ["codigo", "nro", "código"],
+    "institucion": ["institucion educativa:", "institución educativa"],
+    "puesto": ["puesto/procedencia"],
     "celular": ["celular", "telefono", "teléfono", "celular:"],
     "email_personal": ["email_personal", "correo", "correo:", "email"],
     "modalidad": ["modalidad", "modalidad_admision", "modalidad de admisión"],
@@ -124,7 +130,14 @@ _MAP_COLUMNAS = {
 
 
 def _normaliza_header(header: str) -> str:
-    return str(header).strip().lower().replace("  ", " ")
+    import re as _re
+    return _re.sub(r"\s+", " ", str(header).strip().lower())
+
+
+def _normaliza_texto(v) -> str:
+    import unicodedata, re as _re
+    t = unicodedata.normalize("NFKD", str(v or "")).encode("ascii", "ignore").decode("ascii")
+    return " ".join(_re.sub(r"[^a-z0-9 ]", " ", t.lower()).split())
 
 
 def _resolver_columnas(df_columns):
@@ -150,36 +163,109 @@ def _limpiar(valor):
     return texto.replace(".0", "") if texto.endswith(".0") else texto
 
 
+def _fecha_iso(valor):
+    if valor is None or (isinstance(valor, float) and pd.isna(valor)):
+        return None
+    try:
+        ts = pd.to_datetime(valor, errors="coerce", dayfirst=True)
+        if pd.isna(ts) or ts.year < 1940 or ts.year > datetime.now().year:
+            return None
+        return ts.date().isoformat()
+    except Exception:
+        return None
+
+
+def _modalidad_por_hoja(hoja: str) -> str:
+    h = hoja.lower()
+    if "exonera" in h:
+        return "EXONERADO"
+    if "cepre" in h:
+        return "CEPRE"
+    return "ORDINARIO"
+
+
 def parse_excel_ingresantes(contenido: bytes) -> List[dict]:
+    """Lee todas las hojas con columna de DNI (p. ej. ADMISION_2026: B_Datos,
+    B_Datos_Exonerados, B_Datos_Cepre). Ignora hojas de resumen o formularios.
+    Si un DNI se repite entre hojas, se conserva el primer registro."""
     excel = pd.ExcelFile(BytesIO(contenido))
-    hoja = excel.sheet_names[0]
-    df = pd.read_excel(excel, sheet_name=hoja)
-    cols = _resolver_columnas(df.columns)
-    if "dni" not in cols:
+    registros: List[dict] = []
+    vistos = set()
+    hojas_validas = 0
+    for hoja in excel.sheet_names:
+        try:
+            df = pd.read_excel(excel, sheet_name=hoja)
+        except Exception:
+            continue
+        cols = _resolver_columnas(df.columns)
+        if "dni" not in cols:
+            continue
+        hojas_validas += 1
+        modalidad_hoja = _modalidad_por_hoja(hoja)
+        for _, fila in df.iterrows():
+            dni = _limpiar(fila.get(cols["dni"]))
+            if not dni:
+                continue
+            dni = dni.replace(" ", "")
+            if not dni.isdigit() or not (8 <= len(dni) <= 12):
+                continue  # filas vacías, encabezados repetidos o datos inválidos
+            if dni in vistos:
+                continue
+            vistos.add(dni)
+            get = lambda campo: _limpiar(fila.get(cols[campo])) if cols.get(campo) else None
+            apellidos = get("apellidos")
+            if not apellidos:
+                apellidos = f"{get('apellido_paterno') or ''} {get('apellido_materno') or ''}".strip() or None
+            modalidad = get("modalidad")
+            if modalidad and modalidad.upper() in ("EBR", "EBA"):
+                modalidad = None
+            registros.append({
+                "dni": dni,
+                "nombres": (get("nombres") or "SIN NOMBRES").strip(),
+                "apellidos": (apellidos or "SIN APELLIDOS").strip(),
+                "programa_id": get("programa_id"),
+                "programa_nombre": get("programa_nombre"),
+                "celular": get("celular"),
+                "email_personal": (get("email_personal") or "").lower() or None,
+                "fecha_nacimiento": _fecha_iso(fila.get(cols["fecha_nacimiento"])) if cols.get("fecha_nacimiento") else None,
+                "direccion": get("direccion"),
+                "modalidad": (modalidad or modalidad_hoja).upper()[:50],
+                "origen": {
+                    "hoja": hoja,
+                    "codigo_postulante": get("codigo_postulante"),
+                    "institucion_educativa": get("institucion"),
+                    "procedencia": get("puesto"),
+                },
+            })
+    if hojas_validas == 0:
         raise ValueError(
             "El Excel debe incluir una columna de DNI (p. ej. 'DNI' o 'NRO DE DOCUMENTO')."
         )
-
-    registros = []
-    for _, fila in df.iterrows():
-        dni = _limpiar(fila.get(cols["dni"]))
-        if not dni:
-            continue
-        apellidos = _limpiar(fila.get(cols.get("apellidos"))) if cols.get("apellidos") else None
-        if not apellidos:
-            paterno = _limpiar(fila.get(cols.get("apellido_paterno"))) if cols.get("apellido_paterno") else ""
-            materno = _limpiar(fila.get(cols.get("apellido_materno"))) if cols.get("apellido_materno") else ""
-            apellidos = f"{paterno or ''} {materno or ''}".strip() or None
-        registros.append({
-            "dni": dni,
-            "nombres": _limpiar(fila.get(cols.get("nombres"))) if cols.get("nombres") else "SIN NOMBRES",
-            "apellidos": apellidos or "SIN APELLIDOS",
-            "programa_id": _limpiar(fila.get(cols.get("programa_id"))) if cols.get("programa_id") else None,
-            "celular": _limpiar(fila.get(cols.get("celular"))) if cols.get("celular") else None,
-            "email_personal": _limpiar(fila.get(cols.get("email_personal"))) if cols.get("email_personal") else None,
-            "modalidad": (_limpiar(fila.get(cols.get("modalidad"))) if cols.get("modalidad") else None) or "ORDINARIO",
-        })
     return registros
+
+
+async def _mapa_programas(db: AsyncSession) -> Dict[str, int]:
+    """nombre normalizado -> id de programas_estudio (misma base de datos)."""
+    try:
+        rows = (await db.execute(text("SELECT id, nombre FROM programas_estudio"))).all()
+    except Exception:
+        return {}
+    return {_normaliza_texto(n): pid for pid, n in rows if n}
+
+
+def _resolver_programa(reg: dict, mapa: Dict[str, int], defecto: Optional[int]) -> Optional[int]:
+    prog = reg.get("programa_id")
+    if prog and str(prog).strip().isdigit():
+        return int(str(prog).strip())
+    nombre = reg.get("programa_nombre")
+    if nombre and mapa:
+        clave = _normaliza_texto(nombre)
+        if clave in mapa:
+            return mapa[clave]
+        for k, pid in mapa.items():  # coincidencia parcial (p. ej. "Mecatrónica automotriz")
+            if clave and (clave in k or k in clave):
+                return pid
+    return defecto
 
 
 def parse_json_ingresantes(contenido: bytes) -> List[dict]:
@@ -260,9 +346,12 @@ async def admision_excel(
     codigo_periodo = periodo_info.get("codigo") if periodo_info else f"ID {periodo_id}"
     es_inicio = es_periodo_inicio_anio(codigo_periodo)
 
+    mapa_prog = await _mapa_programas(db)
+
     if dry_run:
         preview = []
         for reg in registros:
+            reg = {**reg, "programa_id": _resolver_programa(reg, mapa_prog, programa_id)}
             ya = (await db.execute(
                 select(Estudiante).where(Estudiante.dni == reg["dni"])
             )).scalar_one_or_none()
@@ -295,23 +384,30 @@ async def admision_excel(
         if ya.scalar_one_or_none():
             existentes += 1
             continue
-        prog = reg["programa_id"] or programa_id
-        try:
-            prog_id = int(prog) if prog else None
-        except (TypeError, ValueError):
-            prog = str(prog).strip()
-            prog_id = int(prog) if prog.isdigit() else programa_id
+        prog_id = _resolver_programa(reg, mapa_prog, programa_id)
+        if programa_id and prog_id != programa_id:
+            continue  # se pidió cargar solo un programa
         codigo = f"{datetime.now().year}-{reg['dni']}"
+        extra = {}
+        if reg.get("fecha_nacimiento"):
+            try:
+                extra["fecha_nacimiento"] = datetime.fromisoformat(reg["fecha_nacimiento"]).date()
+            except ValueError:
+                pass
+        if reg.get("direccion"):
+            extra["direccion_domicilio"] = str(reg["direccion"])[:255]
         estudiante = Estudiante(
             codigo_estudiante=codigo,
             dni=reg["dni"],
-            nombres=reg["nombres"],
-            apellidos=reg["apellidos"],
+            nombres=reg["nombres"][:100],
+            apellidos=reg["apellidos"][:100],
             programa_id=prog_id,
-            celular=reg["celular"],
-            email_personal=reg["email_personal"],
-            modalidad_admision=reg["modalidad"] or "ORDINARIO",
+            celular=(str(reg.get("celular"))[:20] if reg.get("celular") else None),
+            email_personal=(str(reg.get("email_personal"))[:150] if reg.get("email_personal") else None),
+            modalidad_admision=reg.get("modalidad") or "ORDINARIO",
             estado_academico="ingresante" if es_inicio else "regular",
+            metadata_admision={**(reg.get("origen") or {}), "programa_excel": reg.get("programa_nombre")},
+            **extra,
         )
         db.add(estudiante)
         await db.flush()
@@ -444,8 +540,21 @@ async def matricular_ingresantes(
         })
 
     await db.commit()
+
+    # Cuentas institucionales DNI@siga.edu para los ingresantes matriculados
+    cuentas = []
+    try:
+        from student_account import asegurar_cuenta_estudiante
+        ids_creados = {c["estudiante_id"] for c in creadas}
+        for est in estudiantes:
+            if est.id in ids_creados:
+                cuentas.append(await asegurar_cuenta_estudiante(db, est))
+    except Exception as exc:
+        print(f"[MATRICULA] No se pudieron crear cuentas de ingresantes: {exc}")
+
     return {
         "matriculados": len(creadas),
+        "cuentas": cuentas,
         "detalle": creadas,
         "omitidas": omitidas,
         "sin_malla": sin_malla,

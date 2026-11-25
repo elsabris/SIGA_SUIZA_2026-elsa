@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Text, Boolean, TIMESTAMP, ForeignKey, JSON, Date
+from sqlalchemy import Column, Integer, String, Text, Boolean, TIMESTAMP, ForeignKey, JSON, Date, LargeBinary
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
 from database import BaseModel
@@ -141,3 +141,15 @@ class HorarioPeriodo(BaseModel):
     estado = Column(String(30), default="borrador") # borrador, revision, publicado
     archivo_excel_url = Column(String(255), nullable=False)
     observaciones = Column(Text)
+
+
+class DocumentoArchivo(BaseModel):
+    """Archivo subido (sílabos, planes de trabajo) guardado en la base de datos."""
+    __tablename__ = "documentos_archivos"
+
+    nombre = Column(String(255), nullable=False)
+    mime = Column(String(120), default="application/octet-stream")
+    tamano = Column(Integer, default=0)
+    categoria = Column(String(50))  # silabo | plan_trabajo | otro
+    subido_por = Column(Integer)
+    contenido = Column(LargeBinary, nullable=False)
