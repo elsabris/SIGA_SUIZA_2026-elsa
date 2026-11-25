@@ -11,6 +11,7 @@ import { CoordinatorActas } from './CoordinatorActas';
 import { ScheduleBuilder } from './ScheduleBuilder';
 import { GraduationCap, Calendar, BookOpen, ClipboardCheck, UserCog, Clock, X, ClipboardList, BarChart3, ExternalLink, Trash2, Download, Copy, AlertTriangle, KeyRound, FileCheck } from 'lucide-react';
 import { AssignmentModal } from './AssignmentModal';
+import { downloadXlsx } from '../../core/utils/xlsxExport';
 
 function useSafeToast() {
   try {
@@ -311,17 +312,30 @@ export function CoordinatorAcademic() {
     return ud ? ud.nombre : `ID: ${id}`;
   };
 
-  const handleExportCSV = () => {
-    const headers = "Unidad Didactica,Docente,Turno,Seccion,Estado\n";
-    const rows = cargaLectiva.map(c => `"${getUDName(c.unidad_didactica_id)}","${getDocenteName(c.docente_id)}",${c.turno},${c.seccion},${c.estado}`).join('\n');
-    const blob = new Blob(["\uFEFF" + headers + rows], { type: 'text/csv;charset=utf-8;' }); // \uFEFF para soportar caracteres UTF-8 en Excel
-    const link = document.createElement("a");
-    const url = URL.createObjectURL(blob);
-    link.setAttribute("href", url);
-    link.setAttribute("download", `Carga_Lectiva_${selectedProgram}_${selectedPeriod}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+  const handleExportExcel = () => {
+    if (!cargaLectiva.length) {
+      toast.warning("No hay asignaciones de carga lectiva para exportar.");
+      return;
+    }
+    const prog = programs.find(p => String(p.id) === String(selectedProgram));
+    const per = periods.find(p => String(p.id) === String(selectedPeriod));
+    const headers = ["N°", "Unidad Didáctica", "Docente", "Turno", "Sección", "Estado"];
+    const rows = cargaLectiva.map((c, i) => [
+      i + 1,
+      getUDName(c.unidad_didactica_id),
+      getDocenteName(c.docente_id),
+      c.turno ?? '',
+      c.seccion ?? '',
+      c.estado ?? '',
+    ]);
+    const safe = (v) => String(v || '').replace(/[^\w\-áéíóúÁÉÍÓÚñÑ ]+/g, '').trim().replace(/\s+/g, '_');
+    downloadXlsx(
+      `Carga_Lectiva_${safe(prog?.nombre || selectedProgram)}_${safe(per?.codigo || selectedPeriod)}.xlsx`,
+      headers,
+      rows,
+      { sheetName: 'Carga Lectiva', title: `Carga Lectiva — ${prog?.nombre || ''} — Periodo ${per?.codigo || ''}` }
+    );
+    toast.success("Carga lectiva exportada a Excel (.xlsx)");
   };
 
   const handleOpenCloneModal = () => {
@@ -577,10 +591,10 @@ export function CoordinatorAcademic() {
                         <h3 className="text-lg font-semibold text-slate-text">Carga Lectiva Actual</h3>
                         {cargaLectiva.length > 0 && (
                           <button 
-                            onClick={handleExportCSV}
+                            onClick={handleExportExcel}
                             className="text-sm font-semibold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 px-3 py-1.5 rounded-lg flex items-center gap-2 transition-colors border border-emerald-200"
                           >
-                            <Download size={16} /> Exportar CSV
+                            <Download size={16} /> Exportar Excel
                           </button>
                         )}
                       </div>

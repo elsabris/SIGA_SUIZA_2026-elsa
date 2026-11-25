@@ -67,6 +67,8 @@ export function AcademicDashboard() {
   
   // Modals state
   const [showImportModal, setShowImportModal] = useState(false);
+  // Carrera existente a la que se registrará el plan (null = importar carrera nueva)
+  const [importTargetProgram, setImportTargetProgram] = useState(null);
   const [importError, setImportError] = useState('');
   const [showPeriodManager, setShowPeriodManager] = useState(false);
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -457,8 +459,13 @@ export function AcademicDashboard() {
     setImportError('');
     
     try {
-      const codigoCarrera = (previewData.codigo || '').trim();
-      const nombreCarrera = (previewData.nombre || '').trim();
+      const target = importTargetProgram;
+      const codigoCarrera = ((target?.codigo || previewData.codigo) || '').trim();
+      const nombreCarrera = ((target?.nombre || previewData.nombre) || '').trim();
+      const clip = (v, n = 255) => {
+        const t = String(v || '').trim();
+        return t.length > n ? `${t.slice(0, n - 1).trim()}…` : t;
+      };
 
       if (!codigoCarrera || !nombreCarrera) {
         const msg = 'La carrera debe contar con código (CNOF) y denominación válidos.';
@@ -494,7 +501,7 @@ export function AcademicDashboard() {
         console.warn('Error no bloqueante en mod-planes-estudio:', errPlanes);
       }
 
-      // 2. Registrar el programa académico en mod-programas-estudio
+      // 2. Registrar (o actualizar) el programa académico en mod-programas-estudio
       const programaData = {
         nombre: nombreCarrera,
         codigo: codigoCarrera,
@@ -504,14 +511,43 @@ export function AcademicDashboard() {
         plan_estudio_id: planId
       };
       
-      const createdProgram = await apiClient.callModule('mod-programas-estudio', 'programas', 'POST', programaData);
+      let createdProgram;
+      if (target?.id) {
+        // Registrar plan de una carrera ya existente: se vincula el plan sin crear otra carrera
+        const updatePayload = {
+          nombre: target.nombre,
+          codigo: target.codigo,
+          descripcion: target.descripcion ?? programaData.descripcion,
+          duracion_periodos: target.duracion_periodos || 6,
+          creditos_totales: parseInt(previewData.creditos_totales) || target.creditos_totales || 0,
+          plan_estudio_id: planId ?? target.plan_estudio_id ?? null,
+          modalidad: target.modalidad || 'presencial',
+          estado: target.estado || 'activo',
+        };
+        createdProgram = await apiClient.callModule('mod-programas-estudio', `programas/${target.id}`, 'PUT', updatePayload);
+        if (!createdProgram?.id) createdProgram = { ...target };
+        // Si la carrera ya tiene módulos registrados, no se duplican
+        const mallaActual = await apiClient.request(`/api/mod-programas-estudio/programas/${target.id}/malla`).catch(() => []);
+        if (Array.isArray(mallaActual) && mallaActual.length > 0) {
+          toast.success(`Plan de estudios vinculado a "${target.nombre}". La malla existente se conservó (${mallaActual.length} módulos).`);
+          setShowImportModal(false);
+          setImportTargetProgram(null);
+          setImportFile(null);
+          setPreviewData(null);
+          setImportError('');
+          await fetchData();
+          return;
+        }
+      } else {
+        createdProgram = await apiClient.callModule('mod-programas-estudio', 'programas', 'POST', programaData);
+      }
 
       // 3. Registrar módulos y unidades didácticas en mod-programas-estudio
       if (createdProgram && createdProgram.id && Array.isArray(previewData.modulos)) {
         for (let i = 0; i < previewData.modulos.length; i++) {
           const modData = previewData.modulos[i];
           const moduloToCreate = {
-            nombre: modData.nombre,
+            nombre: clip(modData.nombre),
             periodo: modData.orden || i + 1,
             horas_totales: modData.horas || 0,
             creditos: modData.creditos || 0,
@@ -524,7 +560,7 @@ export function AcademicDashboard() {
             for (let j = 0; j < modData.unidades.length; j++) {
               const udData = modData.unidades[j];
               const unidadToCreate = {
-                nombre: udData.nombre,
+                nombre: clip(udData.nombre),
                 horas_teoria: udData.horas || 0,
                 horas_practica: 0,
                 creditos: udData.creditos || 0,
@@ -536,8 +572,11 @@ export function AcademicDashboard() {
         }
       }
 
-      toast.success(`La carrera "${nombreCarrera}" (${codigoCarrera}) y su estructura curricular fueron creadas exitosamente.`);
+      toast.success(target?.id
+        ? `Plan de estudios de "${nombreCarrera}" registrado con su estructura curricular.`
+        : `La carrera "${nombreCarrera}" (${codigoCarrera}) y su estructura curricular fueron creadas exitosamente.`);
       setShowImportModal(false);
+      setImportTargetProgram(null);
       setImportFile(null);
       setPreviewData(null);
       setImportError('');
@@ -602,7 +641,7 @@ export function AcademicDashboard() {
 
             <button 
               className="inline-flex items-center justify-center gap-2.5 px-4 py-3 rounded-2xl bg-white/10 hover:bg-white/20 backdrop-blur-md text-white font-semibold text-sm border border-white/20 shadow-sm hover:shadow-lg hover:scale-[1.01] active:scale-[0.99] transition-all duration-200 cursor-pointer"
-              onClick={() => setShowImportModal(true)}
+              onClick={() => { setImportTargetProgram(null); setShowImportModal(true); }}
             >
               <Rocket size={17} className="text-cyan-300" />
               <span>Importar Plan MINEDU</span>
@@ -1025,6 +1064,16 @@ export function AcademicDashboard() {
 
                       {/* Quick Action Buttons */}
                       <div className="pt-3.5 border-t border-slate-100 mt-auto">
+                        {!program.plan_estudio_id && (
+                          <button
+                            className="w-full mb-2 py-2.5 px-3 bg-amber-50 hover:bg-amber-100 text-amber-800 font-semibold rounded-xl border border-amber-200 text-xs transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                            onClick={() => { setImportTargetProgram(program); setImportFile(null); setPreviewData(null); setImportError(''); setShowImportModal(true); }}
+                            title="Cargar el Excel MINEDU del plan de estudios de esta carrera"
+                          >
+                            <FileSpreadsheet size={13} className="shrink-0" />
+                            <span className="truncate">Registrar plan de {program.nombre}</span>
+                          </button>
+                        )}
                         <div className="grid grid-cols-2 gap-2">
                           <button 
                             className="py-2.5 px-3 bg-primary text-white hover:bg-primary-dark font-semibold rounded-xl text-xs transition-all flex items-center justify-center gap-1.5 shadow-sm hover:shadow cursor-pointer"
@@ -1161,6 +1210,15 @@ export function AcademicDashboard() {
                               >
                                 <Sliders size={14} />
                               </button>
+                              {!program.plan_estudio_id && (
+                                <button
+                                  onClick={() => { setImportTargetProgram(program); setImportFile(null); setPreviewData(null); setImportError(''); setShowImportModal(true); }}
+                                  className="p-1.5 bg-amber-50 text-amber-700 hover:bg-amber-500 hover:text-white rounded-lg transition-colors cursor-pointer"
+                                  title={`Registrar plan de ${program.nombre}`}
+                                >
+                                  <FileSpreadsheet size={14} />
+                                </button>
+                              )}
                               <button
                                 onClick={() => setEditingProgram({ ...program })}
                                 className="p-1.5 bg-slate-100 text-slate-600 hover:bg-slate-200 rounded-lg transition-colors cursor-pointer"
@@ -1668,11 +1726,13 @@ export function AcademicDashboard() {
           <div className="bg-white rounded-2xl border border-slate-200/90 shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col overflow-hidden">
             <div className="flex justify-between items-center px-6 py-4 border-b border-slate-100">
               <div>
-                <h5 className="font-bold text-base text-slate-900 tracking-tight">Importar Plan de Estudio MINEDU</h5>
+                <h5 className="font-bold text-base text-slate-900 tracking-tight">
+                  {importTargetProgram ? `Registrar plan de ${importTargetProgram.nombre}` : 'Importar Plan de Estudio MINEDU'}
+                </h5>
                 <p className="text-xs text-slate-400">Estructura curricular automática a partir del formato Excel oficial</p>
               </div>
               <button 
-                onClick={() => { setShowImportModal(false); setImportError(''); }} 
+                onClick={() => { setShowImportModal(false); setImportTargetProgram(null); setImportError(''); }} 
                 className="text-slate-400 hover:text-slate-700 p-1.5 rounded-lg hover:bg-slate-100 transition-colors"
               >
                 <X size={18} />
@@ -1805,7 +1865,7 @@ export function AcademicDashboard() {
               <button 
                 type="button" 
                 className="px-4 py-2 rounded-xl text-xs font-medium text-slate-600 hover:bg-slate-100 transition-colors"
-                onClick={() => { setShowImportModal(false); setImportError(''); }}
+                onClick={() => { setShowImportModal(false); setImportTargetProgram(null); setImportError(''); }}
                 disabled={isProcessing}
               >
                 Cancelar
